@@ -96,22 +96,15 @@ class MemoryBoardView(
 
     // Funkcja obsługująca kliknięcie w kartę
     private fun onClickTile(v: View) {
-        // Pobieramy obiekt Tile na podstawie tagu klikniętego przycisku
         val tile = tiles[v.tag.toString()]
 
-        // Ignorujemy kliknięcie, jeśli karta nie istnieje lub jest już odkryta
         if (tile == null || tile.revealed) return
+        if (matchedPair.isNotEmpty() && matchedPair.peek() == tile) return  // ← nowa linia
 
-        // Dodajemy kartę do stosu aktualnej pary
         matchedPair.push(tile)
-
-        // Przesyłamy identyfikator ikony do logiki gry, aby sprawdzić stan
         val matchResult = logic.process { tile.tileResource }
-
-        // Wywołujemy listener, informując o nowym wydarzeniu w grze
         onGameChangeStateListener(MemoryGameEvent(matchedPair.toList(), matchResult))
 
-        // Jeśli zakończyliśmy turę (Match, NoMatch, Finished), czyścimy stos pary
         if (matchResult != GameStates.Matching) {
             matchedPair.clear()
         }
