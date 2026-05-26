@@ -1,11 +1,14 @@
 package pl.wsei.pam.lab06
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.RequiresApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,65 +27,71 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DisplayMode
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.launch
+import pl.wsei.pam.lab06.data.AppContainer
+import pl.wsei.pam.lab06.data.LocalDateConverter
 import pl.wsei.pam.lab06.ui.theme.Lab06Theme
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 enum class Priority { High, Medium, Low }
 
 data class TodoTask(
+    val id: Int = 0,
     val title: String,
     val deadline: LocalDate,
     val isDone: Boolean,
     val priority: Priority
 )
 
-fun todoTasks(): List<TodoTask> {
-    return listOf(
-        TodoTask("Programming", LocalDate.of(2024, 4, 18), false, Priority.Low),
-        TodoTask("Teaching", LocalDate.of(2024, 5, 12), false, Priority.High),
-        TodoTask("Learning", LocalDate.of(2024, 6, 28), true, Priority.Low),
-        TodoTask("Cooking", LocalDate.of(2024, 8, 18), false, Priority.Medium),
-    )
-}
-
 class Lab06Activity : ComponentActivity() {
+
+    companion object {
+        lateinit var container: AppContainer
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        container = (application as TodoApplication).container
         setContent {
             Lab06Theme {
                 Surface(
@@ -96,18 +105,21 @@ class Lab06Activity : ComponentActivity() {
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun MainScreen() {
     val navController = rememberNavController()
-    val tasks = remember { mutableStateListOf(*todoTasks().toTypedArray()) }
-    NavHost(navController = navController, startDestination = "list") {
-        composable("list") { ListScreen(navController = navController, tasks = tasks) }
-        composable("form") {
-            FormScreen(
-                navController = navController,
-                onSave = { task -> tasks.add(task) }
-            )
+    val postNotificationPermission =
+        rememberPermissionState(permission = Manifest.permission.POST_NOTIFICATIONS)
+    LaunchedEffect(key1 = true) {
+        if (!postNotificationPermission.status.isGranted) {
+            postNotificationPermission.launchPermissionRequest()
         }
+    }
+    NavHost(navController = navController, startDestination = "list") {
+        composable("list") { ListScreen(navController = navController) }
+        composable("form") { FormScreen(navController = navController) }
     }
 }
 
@@ -117,7 +129,8 @@ fun AppTopBar(
     navController: NavController,
     title: String,
     showBackIcon: Boolean,
-    route: String
+    route: String,
+    onSaveClick: () -> Unit = {}
 ) {
     TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(
@@ -128,23 +141,22 @@ fun AppTopBar(
         navigationIcon = {
             if (showBackIcon) {
                 IconButton(onClick = { navController.navigate(route) }) {
-                    Icon(
-                        imageVector = Icons.Filled.ArrowBack,
-                        contentDescription = "Back"
-                    )
+                    Icon(imageVector = Icons.Filled.ArrowBack, contentDescription = "Back")
                 }
             }
         },
         actions = {
-            if (route !== "form") {
-                OutlinedButton(onClick = { navController.navigate("list") }) {
+            if (route != "form") {
+                OutlinedButton(onClick = onSaveClick) {
                     Text(text = "Zapisz", fontSize = 18.sp)
                 }
             } else {
-                IconButton(onClick = { }) {
+                IconButton(onClick = {
+                    Lab06Activity.container.notificationHandler.showSimpleNotification()
+                }) {
                     Icon(imageVector = Icons.Default.Settings, contentDescription = "")
                 }
-                IconButton(onClick = { }) {
+                IconButton(onClick = {}) {
                     Icon(imageVector = Icons.Default.Home, contentDescription = "")
                 }
             }
@@ -153,7 +165,11 @@ fun AppTopBar(
 }
 
 @Composable
-fun ListScreen(navController: NavController, tasks: List<TodoTask>) {
+fun ListScreen(
+    navController: NavController,
+    viewModel: ListViewModel = viewModel(factory = AppViewModelProvider.Factory)
+) {
+    val listUiState by viewModel.listUiState.collectAsState()
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(
@@ -175,32 +191,44 @@ fun ListScreen(navController: NavController, tasks: List<TodoTask>) {
                 showBackIcon = false,
                 route = "form"
             )
-        },
-        content = { padding ->
-            LazyColumn(modifier = Modifier.padding(padding)) {
-                items(items = tasks) { item ->
-                    TodoListItem(item = item)
-                }
+        }
+    ) { padding ->
+        LazyColumn(modifier = Modifier.padding(padding)) {
+            items(items = listUiState.items, key = { it.id }) {
+                TodoListItem(it)
             }
         }
-    )
+    }
 }
 
 @Composable
-fun FormScreen(navController: NavController, onSave: (TodoTask) -> Unit) {
+fun FormScreen(
+    navController: NavController,
+    viewModel: FormViewModel = viewModel(factory = AppViewModelProvider.Factory)
+) {
+    val coroutineScope = rememberCoroutineScope()
     Scaffold(
         topBar = {
             AppTopBar(
                 navController = navController,
                 title = "Form",
                 showBackIcon = true,
-                route = "list"
+                route = "list",
+                onSaveClick = {
+                    coroutineScope.launch {
+                        viewModel.save()
+                        navController.navigate("list")
+                    }
+                }
             )
-        },
-        content = { padding ->
-            FormContent(padding = padding, navController = navController, onSave = onSave)
         }
-    )
+    ) { padding ->
+        TodoTaskInputBody(
+            todoUiState = viewModel.todoTaskUiState,
+            onItemValueChange = viewModel::updateUiState,
+            modifier = Modifier.padding(padding)
+        )
+    }
 }
 
 @Composable
@@ -241,100 +269,99 @@ fun TodoListItem(item: TodoTask, modifier: Modifier = Modifier) {
     }
 }
 
+@Composable
+fun TodoTaskInputBody(
+    todoUiState: TodoTaskUiState,
+    onItemValueChange: (TodoTaskForm) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        TodoTaskInputForm(
+            item = todoUiState.todoTask,
+            onValueChange = onItemValueChange
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FormContent(padding: PaddingValues, navController: NavController, onSave: (TodoTask) -> Unit) {
-    var title by remember { mutableStateOf("") }
-    var selectedDate by remember { mutableStateOf(LocalDate.now()) }
-    var isDone by remember { mutableStateOf(false) }
-    var priority by remember { mutableStateOf(Priority.Low) }
-    var showDatePicker by remember { mutableStateOf(false) }
-
+fun TodoTaskInputForm(
+    item: TodoTaskForm,
+    modifier: Modifier = Modifier,
+    onValueChange: (TodoTaskForm) -> Unit = {},
+    enabled: Boolean = true
+) {
     val datePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = selectedDate
-            .atStartOfDay(ZoneId.of("UTC"))
-            .toInstant()
-            .toEpochMilli()
+        initialDisplayMode = DisplayMode.Picker,
+        yearRange = IntRange(2000, 2030),
+        initialSelectedDateMillis = item.deadline
     )
+    var showDialog by remember { mutableStateOf(false) }
 
-    if (showDatePicker) {
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    datePickerState.selectedDateMillis?.let { millis ->
-                        selectedDate = Instant.ofEpochMilli(millis)
-                            .atZone(ZoneId.of("UTC"))
-                            .toLocalDate()
-                    }
-                    showDatePicker = false
-                }) {
-                    Text("OK")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) {
-                    Text("Cancel")
-                }
-            }
-        ) {
-            DatePicker(state = datePickerState)
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(padding)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Tytuł zadania")
         OutlinedTextField(
-            value = title,
-            onValueChange = { title = it },
-            label = { Text("Title") },
-            modifier = Modifier.fillMaxWidth()
+            value = item.title,
+            onValueChange = { onValueChange(item.copy(title = it)) },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = enabled
         )
 
-        OutlinedButton(
-            onClick = { showDatePicker = true },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(text = "Deadline: ${selectedDate.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))}")
+        Text(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = enabled, onClick = { showDialog = true }),
+            text = "Deadline: ${
+                LocalDateConverter.fromMillis(item.deadline)
+                    .format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+            }",
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        if (showDialog) {
+            DatePickerDialog(
+                onDismissRequest = { showDialog = false },
+                confirmButton = {
+                    Button(onClick = {
+                        showDialog = false
+                        datePickerState.selectedDateMillis?.let {
+                            onValueChange(item.copy(deadline = it))
+                        }
+                    }) {
+                        Text("Pick")
+                    }
+                }
+            ) {
+                DatePicker(state = datePickerState, showModeToggle = true)
+            }
         }
 
-        Text("Priority", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Priority.values().forEach { p ->
-                FilterChip(
-                    selected = priority == p,
-                    onClick = { priority = p },
-                    label = { Text(p.name) }
+        Text("Priorytet")
+        Priority.values().forEach { p ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(
+                    selected = item.priority == p.name,
+                    onClick = { if (enabled) onValueChange(item.copy(priority = p.name)) }
+                )
+                Text(
+                    text = p.name,
+                    modifier = Modifier.clickable(enabled = enabled) {
+                        onValueChange(item.copy(priority = p.name))
+                    }
                 )
             }
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = isDone, onCheckedChange = { isDone = it })
-            Text("Done")
+            Checkbox(
+                checked = item.isDone,
+                onCheckedChange = { if (enabled) onValueChange(item.copy(isDone = it)) }
+            )
+            Text("Ukończone")
         }
-
-        Button(
-            onClick = {
-                onSave(TodoTask(title, selectedDate, isDone, priority))
-                navController.navigate("list")
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Save")
-        }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-    Lab06Theme {
-        MainScreen()
     }
 }
